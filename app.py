@@ -1,6 +1,6 @@
-
 import streamlit as st
 import pandas as pd
+import numpy as np
 import joblib
 
 from sklearn.metrics import (
@@ -23,6 +23,7 @@ st.set_page_config(
 st.title("Bank Marketing Prediction")
 st.write("Predict whether a customer will subscribe to a term deposit.")
 
+
 @st.cache_resource
 def load_preprocessor():
     return joblib.load("models/preprocessor.pkl")
@@ -42,6 +43,27 @@ model_files = {
     "Naive Bayes": "models/Naive_Bayes.pkl",
     "SVM": "models/SVM.pkl"
 }
+
+
+def convert_labels(values):
+    """Convert yes/no or 0/1 labels into consistent binary integers."""
+    if isinstance(values, pd.Series):
+        values = values.to_numpy()
+
+    values = np.asarray(values).ravel()
+
+    if len(values) == 0:
+        raise ValueError("No labels found.")
+
+    if all(str(value).strip().lower() in ("no", "yes", "0", "1")
+           for value in values):
+        return np.array([
+            1 if str(value).strip().lower() in ("yes", "1") else 0
+            for value in values
+        ], dtype=int)
+
+    raise ValueError("Unexpected target or prediction label values.")
+
 
 st.subheader("Select Machine Learning Model")
 
@@ -75,11 +97,8 @@ with col1:
 
 with col2:
     default = st.selectbox("Credit in Default", ["no", "yes"])
-
     balance = st.number_input("Account Balance", value=1000)
-
     housing = st.selectbox("Housing Loan", ["no", "yes"])
-
     loan = st.selectbox("Personal Loan", ["no", "yes"])
 
 with col3:
@@ -94,9 +113,7 @@ with col3:
         "jul", "aug", "sep", "oct", "nov", "dec"
     ])
 
-    campaign = st.number_input(
-        "Campaign Contacts", 1, 100, 1
-    )
+    campaign = st.number_input("Campaign Contacts", 1, 100, 1)
 
 st.subheader("Previous Campaign Information")
 
@@ -104,14 +121,12 @@ col4, col5 = st.columns(2)
 
 with col4:
     pdays = st.number_input(
-        "Days Since Previous Contact",
-        -1, 999, -1
+        "Days Since Previous Contact", -1, 999, -1
     )
 
 with col5:
     previous = st.number_input(
-        "Previous Contacts",
-        0, 500, 0
+        "Previous Contacts", 0, 500, 0
     )
 
 poutcome = st.selectbox(
@@ -143,15 +158,12 @@ if st.button("Predict Subscription", type="primary"):
 
     model = load_model(model_files[selected_model])
 
-    if selected_model == "Naive Bayes":
-        if hasattr(processed_data, "toarray"):
-            processed_data = processed_data.toarray()
+    if selected_model == "Naive Bayes" and hasattr(processed_data, "toarray"):
+        processed_data = processed_data.toarray()
 
-    prediction = model.predict(processed_data)[0]
+    prediction = convert_labels(model.predict(processed_data))[0]
 
-    probability = model.predict_proba(
-        processed_data
-    )[0][1]
+    probability = model.predict_proba(processed_data)[0][1]
 
     st.subheader("Prediction Result")
 
@@ -166,7 +178,6 @@ if st.button("Predict Subscription", type="primary"):
     )
 
     st.progress(float(probability))
-
     st.caption(f"Selected Model: {selected_model}")
 
     if prediction == 1 and probability < 0.5:
@@ -174,6 +185,7 @@ if st.button("Predict Subscription", type="primary"):
             "Note: The SVM classification decision and its "
             "probability estimate can differ."
         )
+
 
 st.divider()
 
@@ -196,6 +208,7 @@ if uploaded_file is not None:
 
         if "y" not in test_df.columns:
             st.error("The uploaded CSV must contain the target column 'y'.")
+
         else:
             st.write("Uploaded Dataset Shape:", test_df.shape)
 
@@ -204,139 +217,105 @@ if uploaded_file is not None:
                 errors="ignore"
             )
 
-            y_test = test_df["y"]
+            y_test = convert_labels(test_df["y"])
 
-            if y_test.dtype == "object":
-                y_test = y_test.map({"no": 0, "yes": 1})
+            expected_columns = list(preprocessor.feature_names_in_)
 
-            if y_test.isna().any():
-                st.error("Invalid target values found in column 'y'.")
+            missing_columns = [
+                col for col in expected_columns
+                if col not in X_test.columns
+            ]
+
+            if missing_columns:
+                st.error(f"Missing columns: {missing_columns}")
+
             else:
-                expected_columns = list(
-                    preprocessor.feature_names_in_
+                X_test = X_test[expected_columns]
+
+                X_processed = preprocessor.transform(X_test)
+
+                model = load_model(model_files[selected_model])
+
+                if selected_model == "Naive Bayes" and hasattr(X_processed, "toarray"):
+                    X_processed = X_processed.toarray()
+
+                predictions = convert_labels(
+                    model.predict(X_processed)
                 )
 
-                missing_columns = [
-                    col for col in expected_columns
-                    if col not in X_test.columns
-                ]
+                probabilities = model.predict_proba(X_processed)[:, 1]
 
-                if missing_columns:
-                    st.error(
-                        f"Missing columns: {missing_columns}"
-                    )
-                else:
-                    X_test = X_test[expected_columns]
+                st.success("Evaluation completed successfully!")
 
-                    X_processed = preprocessor.transform(X_test)
+                st.subheader("Performance Metrics")
 
-                    model = load_model(model_files[selected_model])
+                accuracy = accuracy_score(y_test, predictions)
 
-                    if selected_model == "Naive Bayes":
-                        if hasattr(X_processed, "toarray"):
-                            X_processed = X_processed.toarray()
+                precision = precision_score(
+                    y_test, predictions, zero_division=0
+                )
 
-                    predictions = model.predict(X_processed)
+                recall = recall_score(
+                    y_test, predictions, zero_division=0
+                )
 
-                    probabilities = model.predict_proba(
-                        X_processed
-                    )[:, 1]
+                f1 = f1_score(
+                    y_test, predictions, zero_division=0
+                )
 
-                    st.success("Evaluation completed successfully!")
+                auc = roc_auc_score(y_test, probabilities)
 
-                    st.subheader("Performance Metrics")
+                mcc = matthews_corrcoef(y_test, predictions)
 
-                    accuracy = accuracy_score(
-                        y_test, predictions
-                    )
+                metric_col1, metric_col2, metric_col3 = st.columns(3)
 
-                    precision = precision_score(
-                        y_test, predictions,
-                        zero_division=0
-                    )
+                metric_col1.metric("Accuracy", f"{accuracy:.4f}")
+                metric_col2.metric("Precision", f"{precision:.4f}")
+                metric_col3.metric("Recall", f"{recall:.4f}")
 
-                    recall = recall_score(
-                        y_test, predictions,
-                        zero_division=0
-                    )
+                metric_col4, metric_col5, metric_col6 = st.columns(3)
 
-                    f1 = f1_score(
-                        y_test, predictions,
-                        zero_division=0
-                    )
+                metric_col4.metric("F1 Score", f"{f1:.4f}")
+                metric_col5.metric("AUC", f"{auc:.4f}")
+                metric_col6.metric("MCC", f"{mcc:.4f}")
 
-                    auc = roc_auc_score(
-                        y_test, probabilities
-                    )
+                st.subheader("Confusion Matrix")
 
-                    mcc = matthews_corrcoef(
-                        y_test, predictions
-                    )
+                cm = confusion_matrix(
+                    y_test,
+                    predictions,
+                    labels=[0, 1]
+                )
 
-                    metric_col1, metric_col2, metric_col3 = st.columns(3)
+                cm_df = pd.DataFrame(
+                    cm,
+                    index=["Actual No", "Actual Yes"],
+                    columns=["Predicted No", "Predicted Yes"]
+                )
 
-                    metric_col1.metric(
-                        "Accuracy", f"{accuracy:.4f}"
-                    )
+                st.dataframe(cm_df)
 
-                    metric_col2.metric(
-                        "Precision", f"{precision:.4f}"
-                    )
+                st.subheader("Classification Report")
 
-                    metric_col3.metric(
-                        "Recall", f"{recall:.4f}"
-                    )
+                report = classification_report(
+                    y_test,
+                    predictions,
+                    labels=[0, 1],
+                    target_names=[
+                        "No Subscription",
+                        "Subscription"
+                    ],
+                    output_dict=True,
+                    zero_division=0
+                )
 
-                    metric_col4, metric_col5, metric_col6 = st.columns(3)
+                st.dataframe(
+                    pd.DataFrame(report).transpose()
+                )
 
-                    metric_col4.metric(
-                        "F1 Score", f"{f1:.4f}"
-                    )
-
-                    metric_col5.metric(
-                        "AUC", f"{auc:.4f}"
-                    )
-
-                    metric_col6.metric(
-                        "MCC", f"{mcc:.4f}"
-                    )
-
-                    st.subheader("Confusion Matrix")
-
-                    cm = confusion_matrix(
-                        y_test,
-                        predictions,
-                        labels=[0, 1]
-                    )
-
-                    cm_df = pd.DataFrame(
-                        cm,
-                        index=["Actual No", "Actual Yes"],
-                        columns=["Predicted No", "Predicted Yes"]
-                    )
-
-                    st.dataframe(cm_df)
-
-                    st.subheader("Classification Report")
-
-                    report = classification_report(
-                        y_test,
-                        predictions,
-                        target_names=[
-                            "No Subscription",
-                            "Subscription"
-                        ],
-                        output_dict=True,
-                        zero_division=0
-                    )
-
-                    st.dataframe(
-                        pd.DataFrame(report).transpose()
-                    )
-
-                    st.caption(
-                        f"Evaluation Model: {selected_model}"
-                    )
+                st.caption(
+                    f"Evaluation Model: {selected_model}"
+                )
 
     except Exception as e:
         st.error(f"Evaluation error: {e}")
